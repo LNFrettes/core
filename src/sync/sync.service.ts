@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AnkiConnectClient } from './anki-connect.client';
@@ -13,7 +13,7 @@ import type {
 } from './sync.types';
 
 @Injectable()
-export class SyncService {
+export class SyncService implements OnApplicationBootstrap {
   private readonly logger = new Logger(SyncService.name);
   private isRunning = false;
   private lastRun: SyncRunReport | null = null;
@@ -25,6 +25,29 @@ export class SyncService {
     private readonly mapper: NotionAnkiMapper,
     private readonly ankiClient: AnkiConnectClient,
   ) {}
+
+  async onApplicationBootstrap(): Promise<void> {
+    const startupEnabled =
+      this.configService.get<string>('SYNC_STARTUP_ENABLED') ?? 'true';
+
+    if (startupEnabled.toLowerCase() === 'false') {
+      this.logger.log('Sync de arranque deshabilitado por configuración.');
+      return;
+    }
+
+    try {
+      await this.runSync('startup');
+    } catch (error) {
+      if (error instanceof Error) {
+        this.logger.error(
+          `Falló sync de arranque: ${error.message}`,
+          error.stack,
+        );
+      } else {
+        this.logger.error('Falló sync de arranque con error desconocido.');
+      }
+    }
+  }
 
   @Cron(CronExpression.EVERY_30_MINUTES)
   async runScheduledSync(): Promise<void> {
@@ -57,7 +80,9 @@ export class SyncService {
     return { ankiReachable };
   }
 
-  private async runSync(trigger: 'cron' | 'manual'): Promise<SyncRunReport> {
+  private async runSync(
+    trigger: 'cron' | 'manual' | 'startup',
+  ): Promise<SyncRunReport> {
     if (this.isRunning) {
       this.logger.warn(
         'Se omite corrida porque el proceso anterior sigue ejecutándose.',
@@ -370,7 +395,9 @@ export class SyncService {
     return pageStats;
   }
 
-  private buildLockedSyncReport(trigger: 'cron' | 'manual'): SyncRunReport {
+  private buildLockedSyncReport(
+    trigger: 'cron' | 'manual' | 'startup',
+  ): SyncRunReport {
     const now = new Date().toISOString();
     return {
       trigger,

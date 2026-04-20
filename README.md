@@ -31,6 +31,7 @@ Copiar `.env.example` a `.env` y completar:
 - `SUPABASE_SYNC_TABLE` (default: `notion_sync_pages`)
 - `ANKI_CONNECT_URL` (default: `http://127.0.0.1:8765`)
 - `SYNC_CRON_ENABLED` (default: `true`)
+- `SYNC_STARTUP_ENABLED` (default: `true`)
 
 ## Esquema esperado en Supabase
 

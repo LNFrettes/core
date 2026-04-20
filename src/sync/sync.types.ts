@@ -45,7 +45,7 @@ export interface PageSyncStats {
 }
 
 export interface SyncRunReport {
-  trigger: 'cron' | 'manual';
+  trigger: 'cron' | 'manual' | 'startup';
   startedAt: string;
   finishedAt: string;
   pagesRead: number;
