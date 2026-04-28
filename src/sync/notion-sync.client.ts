@@ -231,6 +231,10 @@ export class NotionSyncClient {
     blockById: Map<string, BlockWithParent>,
   ): boolean {
     const toggleTitle = this.getToggleTitle(toggleEntry.block);
+    if (this.isBlockedToggle(toggleTitle)) {
+      return false;
+    }
+
     if (this.isH4ContainerToggle(toggleTitle)) {
       return false;
     }
@@ -278,6 +282,10 @@ export class NotionSyncClient {
     return /^h4-1\b/i.test(title.trim());
   }
 
+  private isBlockedToggle(title: string): boolean {
+    return title.includes('⛔');
+  }
+
   private collectPlainText(blocks: BlockWithDepth[]): string {
     const lines: string[] = [];
 
@@ -292,7 +300,7 @@ export class NotionSyncClient {
   }
 
   private collectImageUrls(blocks: BlockWithDepth[]): string[] {
-    const urls = new Set<string>();
+    const urls: string[] = [];
 
     for (const { block } of blocks) {
       if (block.type !== 'image') {
@@ -301,13 +309,13 @@ export class NotionSyncClient {
 
       const image = block.image;
       if (image.type === 'external') {
-        urls.add(image.external.url);
+        urls.push(image.external.url);
       } else {
-        urls.add(image.file.url);
+        urls.push(image.file.url);
       }
     }
 
-    return Array.from(urls);
+    return urls;
   }
 
   private renderBlocksAsHtml(blocks: BlockWithDepth[]): string {

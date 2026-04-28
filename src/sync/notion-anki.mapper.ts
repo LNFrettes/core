@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type {
   MappedAnkiNote,
+  NoteMediaFile,
   NotionToggle,
   SyncPageRecord,
 } from './sync.types';
@@ -12,8 +13,9 @@ export class NotionAnkiMapper {
     const key = `${page.notionPageId}:${toggle.id}`;
     const keyHash = this.sha1(key).slice(0, 16);
     const pageHash = this.sha1(page.notionPageId).slice(0, 16);
+    const mediaFiles = this.buildMediaFiles(page.notionPageId, toggle);
 
-    const backHtml = this.buildBackHtml(toggle);
+    const backHtml = this.buildBackHtml(toggle, mediaFiles);
     const normalizedTitle = this.normalizeTextForHash(toggle.title);
     const normalizedBackHtml = this.normalizeBackHtmlForHash(backHtml);
     const contentHash = this.sha1(
@@ -28,6 +30,7 @@ export class NotionAnkiMapper {
       deckName: page.deckName,
       front: toggle.title,
       backHtml,
+      mediaFiles,
       diagnostics: {
         titleLength: toggle.title.length,
         backHtmlLength: backHtml.length,
@@ -39,22 +42,46 @@ export class NotionAnkiMapper {
     };
   }
 
-  private buildBackHtml(toggle: NotionToggle): string {
+  private buildBackHtml(
+    toggle: NotionToggle,
+    mediaFiles: NoteMediaFile[],
+  ): string {
+    let imageIndex = 0;
+    const embeddedBodyHtml = toggle.bodyHtml.replaceAll(
+      /(<img\s+[^>]*src=")(.*?)("[^>]*>)/gi,
+      (_full, prefix: string, _src: string, suffix: string) => {
+        const media = mediaFiles[imageIndex];
+        imageIndex += 1;
+        if (media == null) {
+          return '';
+        }
+
+        return `${prefix}${this.escapeAttribute(media.filename)}${suffix}`;
+      },
+    );
+
     const formattedBody = toggle.bodyHtml.trim();
 
     const escapedLines =
       formattedBody.length > 0
-        ? [formattedBody]
+        ? [embeddedBodyHtml]
         : toggle.bodyText
             .split('\n')
             .map((line) => this.escapeHtml(line.trim()))
             .filter((line) => line.length > 0)
             .map((line) => `<div>${line}</div>`);
 
-    const imageLines = toggle.imageUrls.map(
-      (imageUrl) =>
-        `<div><img src="${this.escapeAttribute(imageUrl)}" /></div>`,
-    );
+    const remainingMediaFiles = mediaFiles.slice(imageIndex);
+    const imageLines =
+      formattedBody.length > 0
+        ? remainingMediaFiles.map(
+            (mediaFile) =>
+              `<div><img src="${this.escapeAttribute(mediaFile.filename)}" /></div>`,
+          )
+        : mediaFiles.map(
+            (mediaFile) =>
+              `<div><img src="${this.escapeAttribute(mediaFile.filename)}" /></div>`,
+          );
 
     const content = [...escapedLines, ...imageLines].join('');
     if (content.length === 0) {
@@ -62,6 +89,47 @@ export class NotionAnkiMapper {
     }
 
     return `<div style="text-align: left;">${content}</div>`;
+  }
+
+  private buildMediaFiles(
+    notionPageId: string,
+    toggle: Pick<NotionToggle, 'id' | 'imageUrls'>,
+  ): NoteMediaFile[] {
+    return toggle.imageUrls.map((imageUrl, index) => {
+      const extension = this.resolveImageExtension(imageUrl);
+      const pageHash = this.sha1(notionPageId).slice(0, 8);
+      const toggleHash = this.sha1(toggle.id).slice(0, 8);
+
+      return {
+        filename: `na_sync_${pageHash}_${toggleHash}_${index}.${extension}`,
+        sourceUrl: imageUrl,
+      };
+    });
+  }
+
+  private resolveImageExtension(value: string): string {
+    const extensionRegex = /\.([a-zA-Z0-9]+)$/;
+
+    try {
+      const parsed = new URL(value);
+      const match = extensionRegex.exec(parsed.pathname);
+      if (match == null) {
+        return 'png';
+      }
+
+      const extension = match[1].toLowerCase();
+      if (extension === 'jpeg') {
+        return 'jpg';
+      }
+
+      if (['jpg', 'png', 'gif', 'webp', 'svg'].includes(extension)) {
+        return extension;
+      }
+
+      return 'png';
+    } catch {
+      return 'png';
+    }
   }
 
   private escapeHtml(value: string): string {

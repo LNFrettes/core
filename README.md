@@ -8,9 +8,10 @@ API simple en NestJS que sincroniza, cada 60 segundos, toggles de páginas de No
 2. Por cada `notion_page_id`, obtiene toggles y sus imágenes desde Notion.
 3. Mapea cada toggle a una nota `Basic`:
    - `Front`: título del toggle
-   - `Back`: contenido hijo + imágenes
-4. Hace upsert en Anki con idempotencia por tags/hash.
-5. Elimina notas de Anki cuando el toggle ya no existe en Notion.
+   - `Back`: contenido hijo + imágenes embebidas en la media collection de Anki
+4. Deduplica notas en Anki por `keyTag` por página (conserva la más antigua).
+5. Sube multimedia a Anki (`storeMediaFile`) y luego hace upsert con idempotencia por tags/hash.
+6. Elimina notas de Anki cuando el toggle ya no existe en Notion.
 
 ## Requisitos
 

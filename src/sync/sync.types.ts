@@ -22,6 +22,7 @@ export interface MappedAnkiNote {
   deckName: string;
   front: string;
   backHtml: string;
+  mediaFiles?: NoteMediaFile[];
   diagnostics?: {
     titleLength: number;
     backHtmlLength: number;
@@ -30,6 +31,11 @@ export interface MappedAnkiNote {
     hasBodyHtml: boolean;
     hasBodyText: boolean;
   };
+}
+
+export interface NoteMediaFile {
+  filename: string;
+  sourceUrl: string;
 }
 
 export interface PageSyncStats {
@@ -42,6 +48,21 @@ export interface PageSyncStats {
   deleted: number;
   failed: number;
   errors: string[];
+  deduplication?: DeduplicationStats;
+}
+
+export interface DeduplicationConflict {
+  keyTag: string;
+  keptNoteId: number;
+  removedNoteIds: number[];
+}
+
+export interface DeduplicationStats {
+  strategy: 'oldest-note-id';
+  conflictsFound: number;
+  duplicatesRemoved: number;
+  removedNoteIds: number[];
+  conflicts: DeduplicationConflict[];
 }
 
 export interface SyncRunReport {

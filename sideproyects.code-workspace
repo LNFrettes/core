@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../active-state-frontend"
+		},
+		{
+			"path": "../../active-state-backend"
+		}
+	],
+	"settings": {}
+}

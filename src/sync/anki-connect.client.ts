@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash } from 'node:crypto';
 import type {
+  DeduplicationConflict,
+  DeduplicationStats,
   MappedAnkiNote,
   PageSyncStats,
   ReformatPageStats,
@@ -57,6 +59,7 @@ export class AnkiConnectClient {
   ): Promise<PageSyncStats> {
     const targetKeyTags = new Set(notes.map((note) => note.keyTag));
     const pageTag = this.pageTagFromPageId(pageStats.notionPageId);
+    await this.deduplicatePageByKeyTag(pageStats.notionPageId, pageTag);
 
     for (const note of notes) {
       const outcome = await this.syncSingleNote(pageStats, note);
@@ -188,7 +191,20 @@ export class AnkiConnectClient {
       const existing = await this.findByKeyTag(note.keyTag);
 
       if (existing == null) {
-        await this.createNote(note);
+        const creation = await this.createOrAdoptNote(note, {
+          notionPageId: pageStats.notionPageId,
+        });
+
+        if (creation === 'adopted') {
+          return {
+            created: 0,
+            updated: 1,
+            unchanged: 0,
+            failed: 0,
+            errors: [],
+          };
+        }
+
         return {
           created: 1,
           updated: 0,
@@ -286,6 +302,13 @@ export class AnkiConnectClient {
     existing: AnkiNoteInfo,
   ): Promise<'unchanged' | 'updated'> {
     const existingHash = this.findHashTag(existing.tags);
+
+    // Si el hash de sincronización coincide, no hay cambio funcional en Notion
+    // aunque Anki haya reformateado el HTML internamente.
+    if (existingHash === note.hashTag) {
+      return 'unchanged';
+    }
+
     const existingFront = this.getFieldValue(existing, 'Front');
     const existingBack = this.getFieldValue(existing, 'Back');
     const semanticExistingHash = this.computeSemanticHash(
@@ -376,20 +399,118 @@ export class AnkiConnectClient {
     };
   }
 
-  private async createNote(note: MappedAnkiNote): Promise<void> {
+  private async createOrAdoptNote(
+    note: MappedAnkiNote,
+    context: { notionPageId: string },
+  ): Promise<'created' | 'adopted'> {
     await this.ensureDeck(note.deckName);
+    await this.uploadMediaFiles(note, context);
 
-    await this.invoke<number>('addNote', {
-      note: {
-        deckName: note.deckName,
-        modelName: 'Basic',
-        fields: {
-          Front: note.front,
-          Back: note.backHtml,
+    try {
+      await this.invoke<number>('addNote', {
+        note: {
+          deckName: note.deckName,
+          modelName: 'Basic',
+          fields: {
+            Front: note.front,
+            Back: note.backHtml,
+          },
+          tags: [note.keyTag, note.pageTag, note.hashTag],
         },
-        tags: [note.keyTag, note.pageTag, note.hashTag],
-      },
+      });
+      return 'created';
+    } catch (error) {
+      if (!this.isAnkiDuplicateAddError(error)) {
+        throw error;
+      }
+
+      const adopted = await this.tryAdoptExistingDuplicate(note, context);
+      if (adopted) {
+        return 'adopted';
+      }
+
+      throw error;
+    }
+  }
+
+  private isAnkiDuplicateAddError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+
+    return error.message.includes(
+      'cannot create note because it is a duplicate',
+    );
+  }
+
+  private async tryAdoptExistingDuplicate(
+    note: MappedAnkiNote,
+    context: { notionPageId: string },
+  ): Promise<boolean> {
+    const duplicateQuery = `deck:"${this.escapeForAnkiQuery(note.deckName)}" note:"Basic" "${this.escapeForAnkiQuery(note.front)}"`;
+    const candidateIds = await this.invoke<number[]>('findNotes', {
+      query: duplicateQuery,
     });
+
+    if (candidateIds.length === 0) {
+      return false;
+    }
+
+    const candidates = await this.invoke<AnkiNoteInfo[]>('notesInfo', {
+      notes: candidateIds,
+    });
+
+    const normalizedTargetFront = this.normalizeTextForHash(note.front);
+    const eligible = candidates.filter((candidate) => {
+      const candidateFront = this.normalizeTextForHash(
+        this.getFieldValue(candidate, 'Front'),
+      );
+      if (candidateFront !== normalizedTargetFront) {
+        return false;
+      }
+
+      const candidateKeyTag = this.findKeyTag(candidate.tags);
+      if (candidateKeyTag != null && candidateKeyTag !== note.keyTag) {
+        return false;
+      }
+
+      const candidatePageTag = this.findPageTag(candidate.tags);
+      if (candidatePageTag != null && candidatePageTag !== note.pageTag) {
+        return false;
+      }
+
+      return true;
+    });
+
+    if (eligible.length === 0) {
+      return false;
+    }
+
+    const selected = [...eligible].sort((a, b) => a.noteId - b.noteId)[0];
+    const previousHash = this.findHashTag(selected.tags);
+
+    this.logger.warn(
+      `Adopción de duplicado por Front. page=${context.notionPageId}, key=${note.keyTag}, deck=${note.deckName}, adoptedNoteId=${selected.noteId}`,
+    );
+
+    await this.updateNote(
+      selected.noteId,
+      note,
+      {
+        notionPageId: context.notionPageId,
+        oldHash: previousHash,
+        noteId: selected.noteId,
+      },
+      false,
+    );
+
+    return true;
+  }
+
+  private escapeForAnkiQuery(value: string): string {
+    return value
+      .replaceAll('\\', String.raw`\\`)
+      .replaceAll('"', String.raw`\"`);
   }
 
   private async updateNote(
@@ -405,6 +526,8 @@ export class AnkiConnectClient {
     this.logger.log(
       `Actualizando nota por hash mismatch. page=${context.notionPageId}, key=${note.keyTag}, noteId=${context.noteId}, oldHash=${context.oldHash ?? 'missing'}, newHash=${note.hashTag}`,
     );
+
+    await this.uploadMediaFiles(note, { notionPageId: context.notionPageId });
 
     await this.invoke<unknown>('updateNoteFields', {
       note: {
@@ -512,14 +635,109 @@ export class AnkiConnectClient {
       return null;
     }
 
+    if (noteIds.length > 1) {
+      const [keptNoteId, ...removedNoteIds] = [...noteIds].sort(
+        (a, b) => a - b,
+      );
+
+      this.logger.warn(
+        `Detectados duplicados por keyTag=${keyTag}. conservada=${keptNoteId}, removidas=${removedNoteIds.join(',')}`,
+      );
+
+      await this.invoke<unknown>('deleteNotes', { notes: removedNoteIds });
+      return this.getSingleNoteInfo(keptNoteId);
+    }
+
+    return this.getSingleNoteInfo(noteIds[0]);
+  }
+
+  private async deduplicatePageByKeyTag(
+    notionPageId: string,
+    pageTag: string,
+  ): Promise<DeduplicationStats> {
+    const noteIds = await this.invoke<number[]>('findNotes', {
+      query: `tag:${pageTag}`,
+    });
+
+    if (noteIds.length < 2) {
+      return {
+        strategy: 'oldest-note-id',
+        conflictsFound: 0,
+        duplicatesRemoved: 0,
+        removedNoteIds: [],
+        conflicts: [],
+      };
+    }
+
     const infos = await this.invoke<AnkiNoteInfo[]>('notesInfo', {
-      notes: [noteIds[0]],
+      notes: noteIds,
+    });
+
+    const groupedByKeyTag = new Map<string, number[]>();
+    for (const info of infos) {
+      const keyTag = info.tags.find((tag) => tag.startsWith('na_sync_key_'));
+      if (keyTag == null) {
+        continue;
+      }
+
+      const current = groupedByKeyTag.get(keyTag) ?? [];
+      current.push(info.noteId);
+      groupedByKeyTag.set(keyTag, current);
+    }
+
+    const conflicts: DeduplicationConflict[] = [];
+    const removedNoteIds: number[] = [];
+    for (const [keyTag, ids] of groupedByKeyTag.entries()) {
+      if (ids.length < 2) {
+        continue;
+      }
+
+      const sorted = [...ids].sort((a, b) => a - b);
+      const [keptNoteId, ...duplicates] = sorted;
+
+      conflicts.push({
+        keyTag,
+        keptNoteId,
+        removedNoteIds: duplicates,
+      });
+      removedNoteIds.push(...duplicates);
+    }
+
+    if (removedNoteIds.length > 0) {
+      await this.invoke<unknown>('deleteNotes', { notes: removedNoteIds });
+      this.logger.warn(
+        `Deduplicación aplicada. page=${notionPageId}, conflicts=${conflicts.length}, removed=${removedNoteIds.length}`,
+      );
+    }
+
+    return {
+      strategy: 'oldest-note-id',
+      conflictsFound: conflicts.length,
+      duplicatesRemoved: removedNoteIds.length,
+      removedNoteIds,
+      conflicts,
+    };
+  }
+
+  private async getSingleNoteInfo(
+    noteId: number,
+  ): Promise<AnkiNoteInfo | null> {
+    const infos = await this.invoke<AnkiNoteInfo[]>('notesInfo', {
+      notes: [noteId],
     });
     return infos[0] ?? null;
   }
 
   private findHashTag(tags: string[]): string | null {
     return tags.find((tag) => tag.startsWith('na_sync_hash_')) ?? null;
+  }
+
+  private findKeyTag(tags: string[]): string | null {
+    return tags.find((tag) => tag.startsWith('na_sync_key_')) ?? null;
+  }
+
+  private findPageTag(tags: string[]): string | null {
+    return tags.find((tag) => tag.startsWith('na_sync_page_')) ?? null;
   }
 
   private async getTagsToReplace(noteId: number): Promise<string[]> {
@@ -593,10 +811,30 @@ export class AnkiConnectClient {
       const parsed = new URL(value);
       parsed.search = '';
       parsed.hash = '';
+      parsed.pathname = this.normalizeEmbeddedMediaFilenameForHash(
+        parsed.pathname,
+      );
       return parsed.toString();
     } catch {
+      return this.normalizeEmbeddedMediaFilenameForHash(value);
+    }
+  }
+
+  private normalizeEmbeddedMediaFilenameForHash(value: string): string {
+    const filePattern =
+      /^na_sync_([0-9a-f]{8})_([0-9a-f]{8})_(\d+)(?:_[0-9a-f]{10})?\.(jpg|png|gif|webp|svg)$/i;
+
+    const lastSlash = value.lastIndexOf('/');
+    const prefix = lastSlash >= 0 ? value.slice(0, lastSlash + 1) : '';
+    const filename = lastSlash >= 0 ? value.slice(lastSlash + 1) : value;
+
+    const match = filePattern.exec(filename);
+    if (match == null) {
       return value;
     }
+
+    const canonicalFilename = `na_sync_${match[1]}_${match[2]}_${match[3]}.${match[4].toLowerCase()}`;
+    return `${prefix}${canonicalFilename}`;
   }
 
   private sha1(value: string): string {
@@ -605,6 +843,33 @@ export class AnkiConnectClient {
 
   private async ensureDeck(deckName: string): Promise<void> {
     await this.invoke<unknown>('createDeck', { deck: deckName });
+  }
+
+  private async uploadMediaFiles(
+    note: MappedAnkiNote,
+    context: { notionPageId: string },
+  ): Promise<void> {
+    const mediaFiles = note.mediaFiles ?? [];
+    if (mediaFiles.length === 0) {
+      return;
+    }
+
+    for (const mediaFile of mediaFiles) {
+      const response = await fetch(mediaFile.sourceUrl);
+      if (!response.ok) {
+        throw new Error(
+          `No se pudo descargar imagen para embedding. page=${context.notionPageId}, key=${note.keyTag}, status=${response.status}, url=${mediaFile.sourceUrl}`,
+        );
+      }
+
+      const bytes = await response.arrayBuffer();
+      const data = Buffer.from(bytes).toString('base64');
+
+      await this.invoke<unknown>('storeMediaFile', {
+        filename: mediaFile.filename,
+        data,
+      });
+    }
   }
 
   private async getDeckNamesAndIds(): Promise<Record<string, number>> {

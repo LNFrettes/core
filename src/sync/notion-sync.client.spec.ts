@@ -145,4 +145,56 @@ describe('NotionSyncClient', () => {
       toggles.find((toggle) => toggle.id === 'toggle-grandchild'),
     ).toBeUndefined();
   });
+
+  it('excluye toggles marcados con ⛔', async () => {
+    const configService = {
+      getOrThrow: jest.fn().mockReturnValue('notion-token'),
+    } as unknown as ConfigService;
+
+    const client = new NotionSyncClient(configService);
+
+    const blocksByParent = new Map<string, BlockObjectResponse[]>([
+      [
+        'page-1',
+        [
+          toggleBlock('toggle-blocked', '⛔ No sincronizar', true),
+          toggleBlock('toggle-ok', 'Sí sincronizar', true),
+        ],
+      ],
+      ['toggle-blocked', [paragraphBlock('p-blocked', 'Respuesta bloqueada')]],
+      ['toggle-ok', [paragraphBlock('p-ok', 'Respuesta visible')]],
+    ]);
+
+    const listMock = jest.fn(
+      ({
+        block_id,
+      }: {
+        block_id: string;
+      }): Promise<ListBlockChildrenResponse> =>
+        Promise.resolve({
+          object: 'list',
+          results: blocksByParent.get(block_id) ?? [],
+          has_more: false,
+          next_cursor: null,
+          type: 'block',
+          block: {},
+          request_id: 'req-2',
+        } as unknown as ListBlockChildrenResponse),
+    );
+
+    (client as unknown as { client: unknown }).client = {
+      blocks: {
+        children: {
+          list: listMock,
+        },
+      },
+    };
+
+    const toggles = await client.getPageToggles('page-1');
+
+    expect(toggles.map((toggle) => toggle.id)).toEqual(['toggle-ok']);
+    expect(
+      toggles.find((toggle) => toggle.id === 'toggle-blocked'),
+    ).toBeUndefined();
+  });
 });
