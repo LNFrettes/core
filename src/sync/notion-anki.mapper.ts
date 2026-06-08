@@ -19,7 +19,7 @@ export class NotionAnkiMapper {
     const normalizedTitle = this.normalizeTextForHash(toggle.title);
     const normalizedBackHtml = this.normalizeBackHtmlForHash(backHtml);
     const contentHash = this.sha1(
-      `${normalizedTitle}\n${normalizedBackHtml}`,
+      `${normalizedTitle}\n${normalizedBackHtml}\n${toggle.lastEditedTime}`,
     ).slice(0, 16);
     const backHtmlHashShort = this.sha1(backHtml).slice(0, 8);
 
@@ -93,15 +93,16 @@ export class NotionAnkiMapper {
 
   private buildMediaFiles(
     notionPageId: string,
-    toggle: Pick<NotionToggle, 'id' | 'imageUrls'>,
+    toggle: Pick<NotionToggle, 'id' | 'imageUrls' | 'lastEditedTime'>,
   ): NoteMediaFile[] {
     return toggle.imageUrls.map((imageUrl, index) => {
       const extension = this.resolveImageExtension(imageUrl);
       const pageHash = this.sha1(notionPageId).slice(0, 8);
       const toggleHash = this.sha1(toggle.id).slice(0, 8);
+      const timeHash = this.sha1(toggle.lastEditedTime).slice(0, 8);
 
       return {
-        filename: `na_sync_${pageHash}_${toggleHash}_${index}.${extension}`,
+        filename: `na_sync_${pageHash}_${toggleHash}_${timeHash}_${index}.${extension}`,
         sourceUrl: imageUrl,
       };
     });

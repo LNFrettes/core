@@ -18,6 +18,7 @@ describe('NotionAnkiMapper', () => {
       bodyText: 'Respuesta\nSegunda linea',
       bodyHtml: '<div><strong>Respuesta</strong></div><div>Segunda linea</div>',
       imageUrls: ['https://example.com/image.png'],
+      lastEditedTime: '2023-01-01T00:00:00.000Z',
     });
 
     expect(mapped.deckName).toBe('Mazo Test');
@@ -47,6 +48,7 @@ describe('NotionAnkiMapper', () => {
       imageUrls: [
         'https://cdn.notion.site/a.png?X-Amz-Signature=abc&Expires=1',
       ],
+      lastEditedTime: '2023-01-01T00:00:00.000Z',
     });
 
     const withSecondUrl = mapper.mapToggle(basePage, {
@@ -58,6 +60,7 @@ describe('NotionAnkiMapper', () => {
       imageUrls: [
         'https://cdn.notion.site/a.png?X-Amz-Signature=def&Expires=2',
       ],
+      lastEditedTime: '2023-01-01T00:00:00.000Z',
     });
 
     expect(withFirstUrl.hashTag).toBe(withSecondUrl.hashTag);
@@ -70,6 +73,7 @@ describe('NotionAnkiMapper', () => {
       bodyText: '',
       bodyHtml: '<div>Linea 1</div><div>Linea 2</div>',
       imageUrls: [],
+      lastEditedTime: '2023-01-01T00:00:00.000Z',
     });
 
     const spaced = mapper.mapToggle(basePage, {
@@ -78,6 +82,7 @@ describe('NotionAnkiMapper', () => {
       bodyText: '',
       bodyHtml: '<div>Linea 1</div>   <div>Linea 2</div>',
       imageUrls: [],
+      lastEditedTime: '2023-01-01T00:00:00.000Z',
     });
 
     expect(compact.hashTag).toBe(spaced.hashTag);
@@ -91,6 +96,7 @@ describe('NotionAnkiMapper', () => {
       bodyHtml:
         '<div>Contenido</div><div><img src="https://example.com/inline.png?token=123" /></div>',
       imageUrls: ['https://example.com/inline.png?token=123'],
+      lastEditedTime: '2023-01-01T00:00:00.000Z',
     });
 
     expect(mapped.backHtml).toContain('<img src="na_sync_');
@@ -108,6 +114,7 @@ describe('NotionAnkiMapper', () => {
       imageUrls: [
         'https://prod-files-secure.s3.us-west-2.amazonaws.com/path-a/file.png?X-Amz-Signature=111',
       ],
+      lastEditedTime: '2023-01-01T00:00:00.000Z',
     });
 
     const second = mapper.mapToggle(basePage, {
@@ -119,6 +126,7 @@ describe('NotionAnkiMapper', () => {
       imageUrls: [
         'https://prod-files-secure.s3.us-west-2.amazonaws.com/path-b/file.png?X-Amz-Signature=999',
       ],
+      lastEditedTime: '2023-01-01T00:00:00.000Z',
     });
 
     expect(first.mediaFiles?.[0]?.filename).toBe(

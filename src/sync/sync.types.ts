@@ -13,6 +13,7 @@ export interface NotionToggle {
   bodyText: string;
   bodyHtml: string;
   imageUrls: string[];
+  lastEditedTime: string;
 }
 
 export interface MappedAnkiNote {

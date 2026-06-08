@@ -49,7 +49,7 @@ export class SyncService implements OnApplicationBootstrap {
     }
   }
 
-  @Cron(CronExpression.EVERY_30_MINUTES)
+  @Cron(CronExpression.EVERY_10_MINUTES)
   async runScheduledSync(): Promise<void> {
     const cronEnabled =
       this.configService.get<string>('SYNC_CRON_ENABLED') ?? 'true';

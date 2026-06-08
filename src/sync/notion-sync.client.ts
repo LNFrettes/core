@@ -70,12 +70,21 @@ export class NotionSyncClient {
         ? await this.listChildrenRecursiveWithDepth(toggle.id)
         : [];
 
+      let maxLastEditedTime = new Date(toggle.last_edited_time).getTime();
+      for (const { block } of childrenWithDepth) {
+        const childTime = new Date(block.last_edited_time).getTime();
+        if (childTime > maxLastEditedTime) {
+          maxLastEditedTime = childTime;
+        }
+      }
+
       const normalizedToggle: NotionToggle = {
         id: toggle.id,
         title: this.getToggleTitle(toggle),
         bodyText: this.collectPlainText(childrenWithDepth),
         bodyHtml: this.renderBlocksAsHtml(childrenWithDepth),
         imageUrls: this.collectImageUrls(childrenWithDepth),
+        lastEditedTime: new Date(maxLastEditedTime).toISOString(),
       };
 
       if (this.isEmptyToggle(normalizedToggle)) {
